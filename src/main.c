@@ -1,77 +1,53 @@
-#include <stdbool.h>
-#include <stdint.h>
-#include "nrf_drv_twi.h"
-#include "app_error.h"
-#include "nrf_delay.h"
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/i2c.h>
+#include <zephyr/logging/log.h>
 
-// TWI instance ID
-#define TWI_INSTANCE_ID     0
+LOG_MODULE_REGISTER(main);
 
-// PMIC I2C Address (7-bit)
-#define PMIC_ADDRESS        0x30
+#define I2C_NODE DT_NODELABEL(i2c0)  // or i2c1 depending on your board
+#define PMIC_ADDR 0x30
 
-static const nrf_drv_twi_t m_twi = NRF_DRV_TWI_INSTANCE(TWI_INSTANCE_ID);
+const struct device *i2c_dev;
 
-void twi_handler(nrf_drv_twi_evt_t const * p_event, void * p_context)
-{
-    // Not used in blocking mode
+void pmic_write_reg(uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = {reg, val};
+    int ret = i2c_write(i2c_dev, buf, sizeof(buf), PMIC_ADDR);
+    if (ret < 0) {
+        LOG_ERR("Failed to write to PMIC");
+    } else {
+        LOG_INF("Wrote 0x%02x to reg 0x%02x", val, reg);
+    }
 }
 
-void twi_init(void)
-{
-    ret_code_t err_code;
+uint8_t pmic_read_reg(uint8_t reg) {
+    uint8_t val = 0;
+    int ret;
 
-    const nrf_drv_twi_config_t twi_config = {
-       .scl                = 27,       // or whichever pin you're using
-       .sda                = 26,
-       .frequency          = NRF_TWI_FREQ_100K,
-       .interrupt_priority = APP_IRQ_PRIORITY_HIGH,
-       .clear_bus_init     = false
-    };
+    ret = i2c_write_read(i2c_dev, PMIC_ADDR, &reg, 1, &val, 1);
+    if (ret < 0) {
+        LOG_ERR("Failed to read from PMIC");
+    } else {
+        LOG_INF("Read 0x%02x from reg 0x%02x", val, reg);
+    }
 
-    err_code = nrf_drv_twi_init(&m_twi, &twi_config, NULL, NULL);
-    APP_ERROR_CHECK(err_code);
-
-    nrf_drv_twi_enable(&m_twi);
+    return val;
 }
 
-void pmic_write_register(uint8_t reg, uint8_t value)
-{
-    uint8_t data[2] = {reg, value};
-    ret_code_t err_code = nrf_drv_twi_tx(&m_twi, PMIC_ADDRESS, data, sizeof(data), false);
-    APP_ERROR_CHECK(err_code);
-}
+void main(void) {
+    i2c_dev = DEVICE_DT_GET(I2C_NODE);
 
-uint8_t pmic_read_register(uint8_t reg)
-{
-    uint8_t value;
-    ret_code_t err_code;
+    if (!device_is_ready(i2c_dev)) {
+        LOG_ERR("I2C device not ready");
+        return;
+    }
 
-    // Send the register address
-    err_code = nrf_drv_twi_tx(&m_twi, PMIC_ADDRESS, &reg, 1, true); // repeated start
-    APP_ERROR_CHECK(err_code);
+    pmic_write_reg(0x01, 0x55);
+    k_sleep(K_MSEC(10));
+    uint8_t read_val = pmic_read_reg(0x01);
 
-    // Read the data
-    err_code = nrf_drv_twi_rx(&m_twi, PMIC_ADDRESS, &value, 1);
-    APP_ERROR_CHECK(err_code);
-
-    return value;
-}
-
-int main(void)
-{
-    twi_init();
-
-    // Example: Write 0x55 to register 0x01
-    pmic_write_register(0x01, 0x55);
-
-    nrf_delay_ms(10);
-
-    // Read back from register 0x01
-    uint8_t read_val = pmic_read_register(0x01);
-
-    while (true)
-    {
-        // Breakpoint here or use RTT logging
+    // You can breakpoint here or loop to observe read_val
+    while (1) {
+        k_sleep(K_SECONDS(1));
     }
 }
